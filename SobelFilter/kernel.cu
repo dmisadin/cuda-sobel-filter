@@ -1,121 +1,98 @@
-﻿
-#include "cuda_runtime.h"
+﻿#include <cuda_runtime.h>
+#include <opencv2/core.hpp>
+#include <opencv2/opencv.hpp>
+#include <iostream>
+#include <chrono>
 #include "device_launch_parameters.h"
+using namespace cv;
+using namespace std;
 
-#include <stdio.h>
+// CUDA kernel for grayscale conversion
+__global__ void rgb2gray(const uchar3* input, unsigned char* gray, int width, int height) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
+    if (x >= width || y >= height) return;
 
-__global__ void addKernel(int *c, const int *a, const int *b)
-{
-    int i = threadIdx.x;
-    c[i] = a[i] + b[i];
+    int idx = y * width + x;
+    uchar3 pixel = input[idx];
+    gray[idx] = static_cast<unsigned char>(0.299f * pixel.x + 0.587f * pixel.y + 0.114f * pixel.z);
 }
 
-int main()
-{
-    const int arraySize = 5;
-    const int a[arraySize] = { 1, 2, 3, 4, 5 };
-    const int b[arraySize] = { 10, 20, 30, 40, 50 };
-    int c[arraySize] = { 0 };
+// CUDA kernel for Sobel filter (X direction only for simplicity)
+__global__ void sobelFilter(const unsigned char* gray, unsigned char* output, int width, int height) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    // Add vectors in parallel.
-    cudaError_t cudaStatus = addWithCuda(c, a, b, arraySize);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "addWithCuda failed!");
-        return 1;
+    if (x <= 0 || x >= width - 1 || y <= 0 || y >= height - 1) return;
+
+    int idx = y * width + x;
+
+    int gx = -gray[(y - 1) * width + (x - 1)] - 2 * gray[y * width + (x - 1)] - gray[(y + 1) * width + (x - 1)]
+        + gray[(y - 1) * width + (x + 1)] + 2 * gray[y * width + (x + 1)] + gray[(y + 1) * width + (x + 1)];
+
+    gx = abs(gx);
+    output[idx] = gx > 255 ? 255 : gx;
+}
+
+int main() {
+    // Ucitaj RGB sliku
+    Mat image = imread("large_image.jpg", IMREAD_COLOR);
+    if (image.empty()) {
+        cerr << "Greska: Slika nije ucitana!" << endl;
+        return -1;
     }
 
-    printf("{1,2,3,4,5} + {10,20,30,40,50} = {%d,%d,%d,%d,%d}\n",
-        c[0], c[1], c[2], c[3], c[4]);
+    int width = image.cols;
+    int height = image.rows;
+    cout << "Dimenzije slike: " << width << "x" << height << endl;
 
-    // cudaDeviceReset must be called before exiting in order for profiling and
-    // tracing tools such as Nsight and Visual Profiler to show complete traces.
-    cudaStatus = cudaDeviceReset();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceReset failed!");
-        return 1;
-    }
+    // ---------- CPU SLOBEL ----------
+    Mat gray_cpu, sobel_cpu;
+    cvtColor(image, gray_cpu, COLOR_BGR2GRAY);
+    auto t1 = chrono::high_resolution_clock::now();
+    Sobel(gray_cpu, sobel_cpu, CV_8U, 1, 0);
+    auto t2 = chrono::high_resolution_clock::now();
+    cout << "CPU vrijeme: " << chrono::duration_cast<chrono::microseconds>(t2 - t1).count() << " us" << endl;
+
+    // ---------- GPU SOBEL ----------
+    uchar3* d_input;
+    unsigned char* d_gray, * d_output;
+    size_t numPixels = width * height;
+
+    // Alokacija memorije na GPU
+    cudaMalloc(&d_input, numPixels * sizeof(uchar3));
+    cudaMalloc(&d_gray, numPixels * sizeof(unsigned char));
+    cudaMalloc(&d_output, numPixels * sizeof(unsigned char));
+
+    // Kopiraj podatke na GPU
+    cudaMemcpy(d_input, image.ptr<uchar3>(), numPixels * sizeof(uchar3), cudaMemcpyHostToDevice);
+
+    dim3 block(16, 16);
+    dim3 grid((width + 15) / 16, (height + 15) / 16);
+
+    rgb2gray << <grid, block >> > (d_input, d_gray, width, height);
+    cudaDeviceSynchronize();
+
+    auto t3 = chrono::high_resolution_clock::now();
+    sobelFilter << <grid, block >> > (d_gray, d_output, width, height);
+    cudaDeviceSynchronize();
+    auto t4 = chrono::high_resolution_clock::now();
+    cout << "GPU vrijeme: " << chrono::duration_cast<chrono::microseconds>(t4 - t3).count() << " us" << endl;
+
+    // Prebaci rezultat natrag
+    Mat result_gpu(height, width, CV_8U);
+    cudaMemcpy(result_gpu.ptr(), d_output, numPixels * sizeof(unsigned char), cudaMemcpyDeviceToHost);
+
+    // Oslobodi memoriju
+    cudaFree(d_input);
+    cudaFree(d_gray);
+    cudaFree(d_output);
+
+    // Spremi i prikazi rezultate
+    imwrite("sobel_cpu.jpg", sobel_cpu);
+    imwrite("sobel_gpu.jpg", result_gpu);
+    cout << "Rezultati spremljeni." << endl;
 
     return 0;
-}
-
-// Helper function for using CUDA to add vectors in parallel.
-cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size)
-{
-    int *dev_a = 0;
-    int *dev_b = 0;
-    int *dev_c = 0;
-    cudaError_t cudaStatus;
-
-    // Choose which GPU to run on, change this on a multi-GPU system.
-    cudaStatus = cudaSetDevice(0);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
-        goto Error;
-    }
-
-    // Allocate GPU buffers for three vectors (two input, one output)    .
-    cudaStatus = cudaMalloc((void**)&dev_c, size * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
-
-    cudaStatus = cudaMalloc((void**)&dev_a, size * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
-
-    cudaStatus = cudaMalloc((void**)&dev_b, size * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
-
-    // Copy input vectors from host memory to GPU buffers.
-    cudaStatus = cudaMemcpy(dev_a, a, size * sizeof(int), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
-
-    cudaStatus = cudaMemcpy(dev_b, b, size * sizeof(int), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
-
-    // Launch a kernel on the GPU with one thread for each element.
-    addKernel<<<1, size>>>(dev_c, dev_a, dev_b);
-
-    // Check for any errors launching the kernel
-    cudaStatus = cudaGetLastError();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
-        goto Error;
-    }
-    
-    // cudaDeviceSynchronize waits for the kernel to finish, and returns
-    // any errors encountered during the launch.
-    cudaStatus = cudaDeviceSynchronize();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching addKernel!\n", cudaStatus);
-        goto Error;
-    }
-
-    // Copy output vector from GPU buffer to host memory.
-    cudaStatus = cudaMemcpy(c, dev_c, size * sizeof(int), cudaMemcpyDeviceToHost);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
-
-Error:
-    cudaFree(dev_c);
-    cudaFree(dev_a);
-    cudaFree(dev_b);
-    
-    return cudaStatus;
 }
