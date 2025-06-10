@@ -1,0 +1,60 @@
+# Build output
+*.exe
+*.obj
+*.pdb
+*.lib
+*.dll
+*.exp
+*.ilk
+*.log
+
+# CUDA intermediate files
+*.cu.obj
+*.cu.dll
+*.cu.exp
+
+# Visual Studio files
+.vscode/
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+
+# Build directories
+x64/
+Debug/
+Release/
+build/
+ipch/
+out/
+
+# OpenCV build artifacts (ako se builda lokalno)
+opencv/build/
+
+# Image output
+*.jpg
+*.png
+*.bmp
+
+# CMake (ako koristiš CMake)
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+
+# System files
+Thumbs.db
+Desktop.ini
+
+# Logs and temp files
+*.log
+*.tmp
+
+# Backup files
+*~
+*.bak
+
+# CUDA generated files
+*.ptx
+*.cubin
+*.fatbin
