@@ -28,11 +28,56 @@ __global__ void sobelFilter(const unsigned char* gray, unsigned char* output, in
 
     int idx = y * width + x;
 
-    int gx = -gray[(y - 1) * width + (x - 1)] - 2 * gray[y * width + (x - 1)] - gray[(y + 1) * width + (x - 1)]
-        + gray[(y - 1) * width + (x + 1)] + 2 * gray[y * width + (x + 1)] + gray[(y + 1) * width + (x + 1)];
+    int gx = - gray[(y - 1) * width + (x - 1)]
+             - 2 * gray[y * width + (x - 1)]
+             - gray[(y + 1) * width + (x - 1)]
+             + gray[(y - 1) * width + (x + 1)]
+             + 2 * gray[y * width + (x + 1)]
+             + gray[(y + 1) * width + (x + 1)];
+
+    int gy = - gray[(y - 1) * width + (x - 1)]
+             - 2 * gray[(y - 1) * width + x]
+             - gray[(y - 1) * width + (x + 1)]
+             + gray[(y + 1) * width + (x - 1)]
+             + 2 * gray[(y + 1) * width + x]
+             + gray[(y + 1) * width + (x + 1)];
 
     gx = abs(gx);
-    output[idx] = gx > 255 ? 255 : gx;
+    gy = abs(gy);
+
+    int magnitude = sqrtf((float)(gx * gx + gy * gy));
+
+    output[idx] = magnitude > 255 ? 255 : magnitude;
+}
+
+void sobelFilterCPU(const cv::Mat& gray, cv::Mat& output) {
+    int width = gray.cols;
+    int height = gray.rows;
+
+    output = cv::Mat::zeros(height, width, CV_8U);
+
+    for (int y = 1; y < height - 1; ++y) {
+        for (int x = 1; x < width - 1; ++x) {
+            int gx = - gray.at<uchar>(y - 1, x - 1)
+                     - 2 * gray.at<uchar>(y, x - 1)
+                     - gray.at<uchar>(y + 1, x - 1)
+                     + gray.at<uchar>(y - 1, x + 1)
+                     + 2 * gray.at<uchar>(y, x + 1)
+                     + gray.at<uchar>(y + 1, x + 1);
+
+            int gy = - gray.at<uchar>(y - 1, x - 1)
+                     - 2 * gray.at<uchar>(y - 1, x)
+                     - gray.at<uchar>(y - 1, x + 1)
+                     + gray.at<uchar>(y + 1, x - 1)
+                     + 2 * gray.at<uchar>(y + 1, x)
+                     + gray.at<uchar>(y + 1, x + 1);
+
+            int magnitude = sqrtf((float)(gx * gx + gy * gy));
+
+            // saturacija
+            output.at<uchar>(y, x) = magnitude > 255 ? 255 : magnitude;
+        }
+    }
 }
 
 int main() {
@@ -49,9 +94,9 @@ int main() {
 
     // ---------- CPU SLOBEL ----------
     Mat gray_cpu, sobel_cpu;
-    cvtColor(image, gray_cpu, COLOR_BGR2GRAY);
     auto t1 = chrono::high_resolution_clock::now();
-    Sobel(gray_cpu, sobel_cpu, CV_8U, 1, 0);
+    cvtColor(image, gray_cpu, COLOR_BGR2GRAY);
+    sobelFilterCPU(gray_cpu, sobel_cpu);
     auto t2 = chrono::high_resolution_clock::now();
     cout << "CPU vrijeme: " << chrono::duration_cast<chrono::microseconds>(t2 - t1).count() << " us" << endl;
 
@@ -71,10 +116,10 @@ int main() {
     dim3 block(16, 16);
     dim3 grid((width + 15) / 16, (height + 15) / 16);
 
+    auto t3 = chrono::high_resolution_clock::now();
     rgb2gray << <grid, block >> > (d_input, d_gray, width, height);
     cudaDeviceSynchronize();
 
-    auto t3 = chrono::high_resolution_clock::now();
     sobelFilter << <grid, block >> > (d_gray, d_output, width, height);
     cudaDeviceSynchronize();
     auto t4 = chrono::high_resolution_clock::now();
