@@ -42,9 +42,6 @@ __global__ void sobelFilter(const unsigned char* gray, unsigned char* output, in
              + 2 * gray[(y + 1) * width + x]
              + gray[(y + 1) * width + (x + 1)];
 
-    gx = abs(gx);
-    gy = abs(gy);
-
     int magnitude = sqrtf((float)(gx * gx + gy * gy));
 
     output[idx] = magnitude > 255 ? 255 : magnitude;
