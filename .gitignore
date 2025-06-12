@@ -33,9 +33,9 @@ out/
 opencv/build/
 
 # Image output
-*.jpg
-*.png
-*.bmp
+#*.jpg
+#*.png
+#*.bmp
 
 # CMake (ako koristiš CMake)
 CMakeFiles/
